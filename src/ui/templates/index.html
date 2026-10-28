@@ -1,0 +1,230 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Multimodal Attendance & Engagement Agent | Classroom Intelligence</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/css/style.css">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+<body>
+  <div class="app-container">
+    <!-- Top Navigation Header -->
+    <header class="app-header">
+      <div class="brand">
+        <div class="brand-logo">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/>
+          </svg>
+        </div>
+        <div>
+          <h1>Multimodal Attendance & Engagement Agent</h1>
+          <p class="subtitle">Edge AI • Privacy-Preserving • Real-Time Classroom Intelligence</p>
+        </div>
+      </div>
+      
+      <div class="header-controls">
+        <div class="badge status-badge" id="offline-badge">
+          <span class="status-dot"></span> Offline Edge Mode
+        </div>
+        <button id="toggle-sim-btn" class="btn btn-secondary">
+          <span id="sim-indicator">Simulator Active</span>
+        </button>
+        <button id="toggle-privacy-btn" class="btn btn-secondary">
+          <span id="privacy-indicator">Privacy: Normal</span>
+        </button>
+        <a href="/api/export/attendance" class="btn btn-primary" download="attendance_report.csv">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/>
+          </svg>
+          Export CSV
+        </a>
+      </div>
+    </header>
+
+    <!-- Key Metrics Grid -->
+    <section class="kpi-grid">
+      <!-- 1. Overall Engagement Index -->
+      <div class="card kpi-card">
+        <div class="kpi-header">
+          <span class="kpi-label">Classroom Engagement</span>
+          <span class="trend-pill" id="trend-indicator">Steady</span>
+        </div>
+        <div class="kpi-body">
+          <div class="kpi-value-container">
+            <span class="kpi-value" id="kpi-engagement">--</span>
+            <span class="kpi-unit">%</span>
+          </div>
+          <div class="progress-bar-track">
+            <div class="progress-bar-fill" id="engagement-bar" style="width: 0%;"></div>
+          </div>
+        </div>
+        <div class="kpi-footer">
+          <span>Multimodal Fusion (Vision + Audio)</span>
+        </div>
+      </div>
+
+      <!-- 2. Visual Attentiveness (Head Pose) -->
+      <div class="card kpi-card">
+        <div class="kpi-header">
+          <span class="kpi-label">Visual Attention (Head Pose)</span>
+          <span class="sub-badge" id="head-pose-state">Attentive</span>
+        </div>
+        <div class="kpi-body">
+          <div class="kpi-value-container">
+            <span class="kpi-value" id="kpi-head-pose">--</span>
+            <span class="kpi-unit">%</span>
+          </div>
+          <div class="progress-bar-track">
+            <div class="progress-bar-fill progress-pose" id="head-pose-bar" style="width: 0%;"></div>
+          </div>
+        </div>
+        <div class="kpi-footer">
+          <span>Yaw/Pitch Gaze Orientation</span>
+        </div>
+      </div>
+
+      <!-- 3. Movement & Inactivity -->
+      <div class="card kpi-card">
+        <div class="kpi-header">
+          <span class="kpi-label">Movement Dynamics</span>
+          <span class="sub-badge" id="motion-state">Active</span>
+        </div>
+        <div class="kpi-body">
+          <div class="kpi-value-container">
+            <span class="kpi-value" id="kpi-movement">--</span>
+            <span class="kpi-unit">%</span>
+          </div>
+          <div class="progress-bar-track">
+            <div class="progress-bar-fill progress-motion" id="movement-bar" style="width: 0%;"></div>
+          </div>
+        </div>
+        <div class="kpi-footer">
+          <span>Optical Motion & Posture Shifts</span>
+        </div>
+      </div>
+
+      <!-- 4. Acoustic Pacing & VAD -->
+      <div class="card kpi-card">
+        <div class="kpi-header">
+          <span class="kpi-label">Audio & VAD Level</span>
+          <span class="sub-badge" id="audio-state">Listening</span>
+        </div>
+        <div class="kpi-body">
+          <div class="kpi-value-container">
+            <span class="kpi-value" id="kpi-audio">--</span>
+            <span class="kpi-unit">%</span>
+          </div>
+          <div class="progress-bar-track">
+            <div class="progress-bar-fill progress-audio" id="audio-bar" style="width: 0%;"></div>
+          </div>
+        </div>
+        <div class="kpi-footer">
+          <span id="speech-ratio-label">Talk Ratio: 0%</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- Main Workspace Layout -->
+    <div class="main-layout">
+      <!-- Left Column: Video Feed & Scenario 2 Engagement Chart -->
+      <div class="feed-column">
+        <!-- Live HUD Video Stream -->
+        <div class="card video-card">
+          <div class="card-header">
+            <div class="header-title">
+              <span class="pulse-indicator"></span>
+              <h2>Real-Time Video Intelligence Feed</h2>
+            </div>
+            <div class="feed-tags">
+              <span class="tag">640x480</span>
+              <span class="tag">Face Tracking</span>
+              <span class="tag">Head Pose HUD</span>
+            </div>
+          </div>
+          <div class="video-container">
+            <img id="video-stream" src="/video_feed" alt="Classroom Video Stream">
+            <div class="feed-overlay-note">
+              <span id="feed-status-text">Processing local vision stream...</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Scenario 2: Real-time Engagement Timeline -->
+        <div class="card chart-card">
+          <div class="card-header">
+            <h2>Scenario 2: Engagement Trends & Dynamics Analysis</h2>
+            <div class="legend-group">
+              <span class="legend-item"><span class="legend-dot dot-eng"></span> Engagement Index</span>
+              <span class="legend-item"><span class="legend-dot dot-pose"></span> Head Pose</span>
+              <span class="legend-item"><span class="legend-dot dot-audio"></span> Audio</span>
+            </div>
+          </div>
+          <div class="chart-container">
+            <canvas id="engagement-chart"></canvas>
+          </div>
+        </div>
+      </div>
+
+      <!-- Right Column: Scenario 1 Attendance & Scenario 3 AI Suggestions -->
+      <div class="side-column">
+        <!-- Scenario 3: AI-Driven Teaching Suggestions -->
+        <div class="card suggestions-card">
+          <div class="card-header">
+            <div class="header-title">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <circle cx="12" cy="12" r="10"/>
+                <line x1="12" y1="16" x2="12" y2="12"/>
+                <line x1="12" y1="8" x2="12.01" y2="8"/>
+              </svg>
+              <h2>Scenario 3: AI Teaching Suggestions</h2>
+            </div>
+            <span class="sub-badge badge-advisor">Assistive Copilot</span>
+          </div>
+          <div class="suggestions-list" id="suggestions-container">
+            <div class="suggestion-placeholder">
+              <p>Analyzing classroom engagement dynamics...</p>
+              <small>Actionable suggestions appear automatically when pacing or attention shifts are detected.</small>
+            </div>
+          </div>
+        </div>
+
+        <!-- Scenario 1: Automated Attendance Engine -->
+        <div class="card attendance-card">
+          <div class="card-header">
+            <div>
+              <h2>Scenario 1: Automated Attendance Tracking</h2>
+              <p class="section-desc">Marked via sustained presence verification (filters transient passersby)</p>
+            </div>
+            <div class="attendance-summary-badge" id="attendance-stat">
+              0 / 0 Present
+            </div>
+          </div>
+          
+          <div class="table-container">
+            <table class="roster-table">
+              <thead>
+                <tr>
+                  <th>Roll No</th>
+                  <th>Student Name</th>
+                  <th>Status</th>
+                  <th>Sustained</th>
+                  <th>Window %</th>
+                </tr>
+              </thead>
+              <tbody id="attendance-tbody">
+                <!-- Dynamically populated rows -->
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="/static/js/dashboard.js"></script>
+</body>
+</html>

@@ -1,0 +1,23 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Database and logs
+*.db
+*.sqlite3
+data/classroom_intelligence.db
+data/attendance_logs/*.csv
+data/session_telemetry/*
+
+# Virtual environments
+.env
+.venv
+env/
+venv/
+ENV/
+
+# IDE files
+.vscode/
+.idea/
+*.swp
