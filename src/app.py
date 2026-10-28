@@ -60,7 +60,7 @@ def generate_video_stream():
 
 @app.get("/", response_class=HTMLResponse)
 async def index_view(request: Request):
-    return templates.TemplateResponse("index.html", {"request": request, "session_id": SESSION_ID})
+    return templates.TemplateResponse(request=request, name="index.html", context={"session_id": SESSION_ID})
 
 
 @app.get("/video_feed")

@@ -75,8 +75,9 @@ class AppConfig(BaseModel):
     video_height: int = 480
     fps_target: int = 24
     host: str = "127.0.0.1"
-    port: int = 8000
+    port: int = 8080
 
 
 # Singleton default configuration
 config = AppConfig()
+

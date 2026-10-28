@@ -145,7 +145,7 @@ def create_session(session_id: str, title: str, total_enrolled: int = 6) -> Dict
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute("""
-    INSERT INTO sessions (session_id, title, total_enrolled, is_active)
+    INSERT OR IGNORE INTO sessions (session_id, title, total_enrolled, is_active)
     VALUES (?, ?, ?, 1)
     """, (session_id, title, total_enrolled))
     conn.commit()
