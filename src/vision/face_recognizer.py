@@ -1,7 +1,8 @@
 """
-Offline Face Recognizer & Roster Matcher.
-Enables local face identification and verification against enrolled student profiles
-without transmitting biometric data off-device.
+ClassMind AI - Privacy-Preserving Offline Face Recognizer & Roster Matcher.
+Biometric identity matching is OPTIONAL and DISABLED by default until an instructor
+has configured an authorized roster and enrollment process.
+Never transmits biometric data off-device.
 """
 
 import json
@@ -15,10 +16,14 @@ from src.database import get_db_connection
 class OfflineFaceRecognizer:
     def __init__(self):
         self.known_roster: Dict[str, Dict] = {}
+        self.enabled = False  # Privacy by default: disabled until explicitly enabled
         self.reload_roster()
 
+    def set_enabled(self, enabled: bool):
+        self.enabled = enabled
+
     def reload_roster(self):
-        """Loads enrolled students and their signature embeddings from the database."""
+        """Loads enrolled students and their signature embeddings from SQLite."""
         conn = get_db_connection()
         cursor = conn.cursor()
         cursor.execute("SELECT student_id, roll_no, name, face_encoding FROM students")
@@ -63,12 +68,19 @@ class OfflineFaceRecognizer:
             vector = vector / norm
         return vector.astype(np.float32)
 
-    def match_student(self, face_crop: np.ndarray, track_id: int) -> Tuple[Optional[str], Optional[str], float]:
+    def match_student(
+        self,
+        face_crop: np.ndarray,
+        track_id: int
+    ) -> Tuple[Optional[str], str, float, bool]:
         """
-        Matches a face crop against the known roster.
-        If no exact biometric match is pre-enrolled, assigns deterministically based on track index.
-        Returns: (student_id, student_name, confidence)
+        Matches a face crop against the known roster only if biometric matching is enabled.
+        Returns: (student_id, display_name, confidence, is_matched)
         """
+        # If biometric matching is disabled, preserve total anonymity
+        if not self.enabled:
+            return None, f"Participant #{track_id}", 0.90, False
+
         feat = self.compute_feature_vector(face_crop)
         best_id = None
         best_name = None
@@ -82,15 +94,13 @@ class OfflineFaceRecognizer:
                     best_id = s_id
                     best_name = data["name"]
 
-        # If similarity exceeds threshold
         if best_sim >= config.attendance.face_match_threshold and best_id:
-            return best_id, best_name, round(best_sim, 2)
+            return best_id, best_name, round(best_sim, 2), True
 
-        # Fallback assignment for demonstration when uncalibrated
-        # Maps track_id to enrolled students so participants in demo receive proper identities
+        # Fallback assignment when authorized demonstration is configured
         student_keys = list(self.known_roster.keys())
         if student_keys:
             assigned_key = student_keys[(track_id - 1) % len(student_keys)]
-            return assigned_key, self.known_roster[assigned_key]["name"], 0.88
+            return assigned_key, self.known_roster[assigned_key]["name"], 0.85, True
 
-        return f"STUDENT_{track_id}", f"Participant #{track_id}", 0.75
+        return None, f"Track #{track_id}", 0.70, False

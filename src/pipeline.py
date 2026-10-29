@@ -1,15 +1,17 @@
 """
-Unified Multimodal Pipeline Orchestrator.
-Coordinates computer vision, audio processing, sustained presence attendance,
-engagement fusion, and the teaching advisor agent.
-Supports Live Webcam, Pre-recorded Video, and Synthetic Classroom Simulation.
+ClassMind AI - Unified Multimodal Pipeline Orchestrator.
+Coordinates computer vision, acoustic processing, temporal attendance verification,
+multimodal engagement fusion, and pedagogical decision support.
+Supports live hardware devices and deterministic synthetic simulation.
 """
 
+import sys
 import time
 import math
 import cv2
 import numpy as np
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, Any
+import threading
 
 from config import config
 from src.vision.face_tracker import FaceTracker
@@ -21,17 +23,24 @@ from src.audio.interaction_tracker import InteractionTracker
 from src.attendance.sustained_presence import SustainedPresenceEngine
 from src.fusion.engagement_engine import MultimodalEngagementEngine
 from src.agent.teaching_advisor import TeachingAdvisorAgent
+from src.simulation.classroom_simulator import DeterministicClassroomSimulator
 
 
 class ClassroomPipeline:
-    def __init__(self, session_id: str = "SESSION-LIVE-01", video_source: any = 0):
+    def __init__(self, session_id: str = "SESSION-LIVE-01", video_source: Any = 0, force_simulation: bool = False):
         self.session_id = session_id
         self.video_source = video_source
-        self.is_running = False
+        self.is_running = True
+        self.is_paused = False
         self.cap: Optional[cv2.VideoCapture] = None
-        self.use_simulation = False
+        self.use_simulation = force_simulation
+        self.camera_error: Optional[str] = None
+        self.lock = threading.Lock()
 
-        # Core Engines
+        # Deterministic simulation engine
+        self.simulator = DeterministicClassroomSimulator(seed=42)
+
+        # Core Analysis Engines
         self.face_tracker = FaceTracker()
         self.head_pose_estimator = HeadPoseEstimator()
         self.movement_detector = MovementDetector()
@@ -42,210 +51,273 @@ class ClassroomPipeline:
         self.engagement_engine = MultimodalEngagementEngine(session_id)
         self.teaching_advisor = TeachingAdvisorAgent(session_id)
 
-        # State cache
-        self.latest_telemetry: Dict[str, any] = {}
-        self.latest_interaction: Dict[str, any] = {}
+        # Performance & telemetry metrics
+        self.latest_telemetry: Dict[str, Any] = {}
+        self.latest_interaction: Dict[str, Any] = {}
+        self.latest_frame: Optional[np.ndarray] = None
+        self.latest_jpeg_bytes: bytes = b""
+        self.latest_output: Dict[str, Any] = {}
         self.last_frame_time = time.time()
         self.simulation_step = 0.0
+        self.fps = float(config.fps_target or 24.0)
+        self.inference_latency_ms = 12.0
+        self.frame_count = 0
+        self.target_fps = float(config.fps_target or 24.0)
 
-        self._init_video_capture()
-
-    def _init_video_capture(self):
-        """Initializes OpenCV video capture or switches to simulator if no physical camera found."""
-        try:
-            self.cap = cv2.VideoCapture(self.video_source)
-            if not self.cap.isOpened():
-                print("[Pipeline] No physical video feed opened. Activating Classroom Simulator Mode.")
-                self.use_simulation = True
-            else:
-                ret, test_frame = self.cap.read()
-                if not ret or test_frame is None:
-                    print("[Pipeline] Unable to read from camera. Activating Classroom Simulator Mode.")
-                    self.use_simulation = True
-                else:
-                    print("[Pipeline] Successfully connected to live video capture.")
-        except Exception as e:
-            print(f"[Pipeline] Video init exception: {e}. Activating Classroom Simulator Mode.")
-            self.use_simulation = True
-
-    def set_simulation_mode(self, enabled: bool):
-        self.use_simulation = enabled
-        if not enabled:
+        # Initialize video hardware if not forcing simulation
+        if not self.use_simulation:
             self._init_video_capture()
 
-    def generate_simulated_frame(self, t: float) -> np.ndarray:
+        # Generate initial frame and telemetry immediately
+        try:
+            self._step_pipeline()
+        except Exception as e:
+            print(f"[Pipeline] Initial step error: {e}")
+
+        # Start continuous background processing thread (Single Producer)
+        self.worker_thread = threading.Thread(
+            target=self._worker_loop,
+            daemon=True,
+            name="ClassroomPipelineWorker"
+        )
+        self.worker_thread.start()
+
+    def _release_camera(self):
+        """Safely releases active video capture hardware."""
+        if self.cap is not None:
+            try:
+                self.cap.release()
+            except Exception as e:
+                print(f"[Pipeline] Error releasing camera: {e}")
+            self.cap = None
+
+    def _init_video_capture(self):
+        """Initializes physical camera capture with graceful fallback to simulator if unavailable."""
+        self._release_camera()
+
+        # On Windows, DirectShow (CAP_DSHOW) opens webcams fast and reliably
+        backends = []
+        if sys.platform.startswith("win"):
+            backends = [cv2.CAP_DSHOW, cv2.CAP_ANY]
+        else:
+            backends = [cv2.CAP_ANY]
+
+        success = False
+        last_error = None
+
+        for backend in backends:
+            try:
+                cap = (
+                    cv2.VideoCapture(self.video_source, backend)
+                    if backend != cv2.CAP_ANY
+                    else cv2.VideoCapture(self.video_source)
+                )
+                if cap is not None and cap.isOpened():
+                    cap.set(cv2.CAP_PROP_FRAME_WIDTH, config.video_width)
+                    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, config.video_height)
+                    ret, test_frame = cap.read()
+                    if ret and test_frame is not None:
+                        self.cap = cap
+                        self.use_simulation = False
+                        self.camera_error = None
+                        print(f"[Pipeline] Successfully connected to live video capture (source #{self.video_source}, backend: {backend}).")
+                        success = True
+                        break
+                    else:
+                        cap.release()
+                elif cap is not None:
+                    cap.release()
+            except Exception as e:
+                last_error = str(e)
+
+        if not success:
+            self.cap = None
+            self.use_simulation = True
+            self.camera_error = f"Webcam #{self.video_source} not accessible ({last_error or 'device busy or unavailable'})."
+            print(f"[Pipeline] {self.camera_error} Activating Simulation Mode.")
+
+    def set_simulation_mode(self, enabled: bool):
+        with self.lock:
+            if enabled:
+                self.use_simulation = True
+                self._release_camera()
+                self.camera_error = None
+                print("[Pipeline] Switched to Simulation Mode.")
+            else:
+                self.use_simulation = False
+                self._init_video_capture()
+        try:
+            self._step_pipeline()
+        except Exception:
+            pass
+
+    def set_paused(self, paused: bool):
+        with self.lock:
+            self.is_paused = paused
+        try:
+            self._step_pipeline()
+        except Exception:
+            pass
+
+    def _worker_loop(self):
+        """Continuous background execution loop maintaining target frame rate."""
+        interval = 1.0 / max(1.0, self.target_fps)
+        while self.is_running:
+            t0 = time.perf_counter()
+            try:
+                self._step_pipeline()
+            except Exception as e:
+                print(f"[Pipeline] Worker iteration exception: {e}")
+            elapsed = time.perf_counter() - t0
+            sleep_time = max(0.005, interval - elapsed)
+            time.sleep(sleep_time)
+
+    def _step_pipeline(self) -> Tuple[np.ndarray, Dict[str, Any]]:
         """
-        Generates a photorealistic synthetic classroom scene with 3 dynamic student avatars
-        displaying varied head movements, note-taking, and periodic attention shifts.
-        Ensures the system can be thoroughly demonstrated without requiring a live camera.
+        Executes one full pipeline cycle:
+        Vision + Audio -> Temporal Attendance -> Engagement Fusion -> Teaching Copilot -> HUD & JPEG.
+        Must be thread-safe.
         """
-        w, h = 640, 480
-        # Dark modern classroom background gradient
-        img = np.zeros((h, w, 3), dtype=np.uint8)
-        img[:] = (35, 30, 40)
-        
-        # Classroom blackboard / digital screen in background
-        cv2.rectangle(img, (50, 30), (590, 160), (45, 55, 50), -1)
-        cv2.rectangle(img, (50, 30), (590, 160), (80, 100, 90), 2)
-        cv2.putText(img, "LECTURE: MULTIMODAL INTELLIGENCE", (70, 75), cv2.FONT_HERSHEY_SIMPLEX, 0.65, (200, 230, 210), 2)
-        cv2.putText(img, "Topic: Real-Time Signal Fusion & Edge AI", (70, 115), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (160, 190, 170), 1)
-
-        # 3 Student Desks & Avatars
-        # Student 1: Alex Johnson (Attentive, occasional nod)
-        # Student 2: Elena Rodriguez (Notes / Looking down periodically)
-        # Student 3: Marcus Chen (Looking away or transient presence)
-        students_sim = [
-            {"center_x": 140, "base_y": 320, "name": "Alex Johnson", "behavior": "attentive"},
-            {"center_x": 320, "base_y": 310, "name": "Elena Rodriguez", "behavior": "notes"},
-            {"center_x": 500, "base_y": 320, "name": "Marcus Chen", "behavior": "fidget"}
-        ]
-
-        for s in students_sim:
-            cx = s["center_x"]
-            by = s["base_y"]
-            
-            # Subtle natural breathing / movement sway
-            sway_x = int(math.sin(t * 1.2 + cx) * 3)
-            sway_y = int(math.cos(t * 1.5 + cx) * 2)
-
-            # Torso
-            cv2.ellipse(img, (cx + sway_x, by + 90 + sway_y), (60, 50), 0, 0, 360, (70, 60, 80), -1)
-            # Head (Face)
-            face_cy = by + sway_y
-            cv2.circle(img, (cx + sway_x, face_cy), 42, (185, 205, 235), -1)
-            cv2.circle(img, (cx + sway_x, face_cy), 42, (140, 160, 190), 2)
-
-            # Hair
-            cv2.ellipse(img, (cx + sway_x, face_cy - 18), (42, 26), 0, 180, 360, (50, 40, 45), -1)
-
-            # Dynamic eyes and nose based on simulated behavior
-            eye_offset_x = 0
-            eye_offset_y = 0
-            if s["behavior"] == "notes" and (math.sin(t * 0.8) > 0.1):
-                # Looking down at desk
-                eye_offset_y = 12
-            elif s["behavior"] == "fidget" and (math.cos(t * 0.6) > 0.3):
-                # Looking sideways / away
-                eye_offset_x = 14
-
-            # Eyes
-            cv2.circle(img, (cx + sway_x - 14 + eye_offset_x, face_cy - 2 + eye_offset_y), 5, (40, 40, 50), -1)
-            cv2.circle(img, (cx + sway_x + 14 + eye_offset_x, face_cy - 2 + eye_offset_y), 5, (40, 40, 50), -1)
-            
-            # Desk
-            cv2.rectangle(img, (cx - 75, by + 100), (cx + 75, by + 150), (45, 40, 55), -1)
-            cv2.rectangle(img, (cx - 75, by + 100), (cx + 75, by + 150), (70, 65, 80), 2)
-
-        return img
-
-    def process_frame(self) -> Tuple[np.ndarray, Dict[str, any]]:
-        """
-        Core pipeline execution loop for a single frame.
-        Processes vision + audio, updates attendance & engagement, generates recommendations.
-        """
+        start_proc = time.perf_counter()
         now = time.time()
         dt = max(0.01, min(0.5, now - self.last_frame_time))
         self.last_frame_time = now
         self.simulation_step += dt
 
-        # 1. Grab Frame
+        if self.is_paused:
+            pause_frame = np.zeros((config.video_height, config.video_width, 3), dtype=np.uint8)
+            pause_frame[:] = (30, 25, 35)
+            cv2.putText(pause_frame, "SESSION PAUSED", (config.video_width // 2 - 130, config.video_height // 2),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.85, (100, 200, 255), 2)
+            cv2.putText(pause_frame, "Monitoring suspended", (config.video_width // 2 - 95, config.video_height // 2 + 35),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.50, (180, 180, 180), 1)
+            summary = self.attendance_engine.get_summary()
+            pipeline_output = {
+                "telemetry": self.latest_telemetry or {},
+                "interaction": self.latest_interaction or {},
+                "attendance": summary,
+                "latest_suggestion": None,
+                "participants": [],
+                "use_simulation": self.use_simulation,
+                "is_paused": True,
+                "fps": round(self.fps, 1),
+                "latency_ms": round(self.inference_latency_ms, 1),
+                "camera_error": self.camera_error
+            }
+            ret, buf = cv2.imencode(".jpg", pause_frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
+            with self.lock:
+                self.latest_frame = pause_frame
+                if ret:
+                    self.latest_jpeg_bytes = buf.tobytes()
+                self.latest_output = pipeline_output
+            return pause_frame, pipeline_output
+
+        # 1. Video Capture / Synthetic Frame
         frame = None
+        participants_payload = []
+        detected_student_ids = []
+
         if not self.use_simulation and self.cap is not None and self.cap.isOpened():
             ret, captured = self.cap.read()
             if ret and captured is not None:
                 frame = cv2.resize(captured, (config.video_width, config.video_height))
+                # Real computer vision processing
+                tracked_faces = self.face_tracker.detect_and_track(frame, now)
+                for face in tracked_faces:
+                    x, y, w, h = face.bbox
+                    pose = self.head_pose_estimator.estimate_pose(frame, face.bbox)
+                    motion = self.movement_detector.compute_motion(frame, face.track_id, face.bbox, now)
+
+                    f_h, f_w = frame.shape[:2]
+                    face_crop = frame[max(0, y):min(f_h, y+h), max(0, x):min(f_w, x+w)]
+                    s_id, s_name, conf, is_matched = self.face_recognizer.match_student(face_crop, face.track_id)
+                    if s_id:
+                        detected_student_ids.append(s_id)
+
+                    participants_payload.append({
+                        "track_id": face.track_id,
+                        "student_id": s_id,
+                        "display_name": s_name,
+                        "state": pose["state"],
+                        "attentiveness_score": pose["attentiveness_score"],
+                        "motion_score": motion["motion_score"],
+                        "is_inactive": motion["is_inactive"],
+                        "inactivity_seconds": motion["inactivity_seconds"],
+                        "identity_matched": is_matched,
+                        "attendance_verified": is_matched
+                    })
+
+                    # Optional Privacy Blur
+                    if config.privacy.anonymize_faces:
+                        frame = self.face_tracker.apply_privacy_blur(frame, face.bbox)
+
+                    # Annotate HUD Bounding Box
+                    col = (70, 215, 120) if pose["attentiveness_score"] >= 0.70 else (
+                        (45, 185, 245) if pose["attentiveness_score"] >= 0.40 else (75, 75, 235)
+                    )
+                    cv2.rectangle(frame, (x, y), (x + w, y + h), col, 2)
+                    label = f"#{face.track_id} {s_name} [{pose['state']}]"
+                    cv2.rectangle(frame, (x, y - 24), (x + len(label) * 8 + 10, y), (20, 20, 26), -1)
+                    cv2.putText(frame, label, (x + 4, y - 7), cv2.FONT_HERSHEY_SIMPLEX, 0.42, col, 1)
             else:
-                frame = self.generate_simulated_frame(self.simulation_step)
+                print("[Pipeline] Hardware camera disconnected or read failed. Falling back to Simulation Mode.")
+                self._release_camera()
+                self.use_simulation = True
+                self.camera_error = "Hardware camera disconnected. Fallback to Simulation Mode."
+                frame, participants_payload, detected_student_ids = self.simulator.generate_frame(
+                    self.simulation_step, anonymize=config.privacy.anonymize_faces
+                )
         else:
-            frame = self.generate_simulated_frame(self.simulation_step)
+            # Deterministic simulation mode
+            frame, participants_payload, detected_student_ids = self.simulator.generate_frame(
+                self.simulation_step, anonymize=config.privacy.anonymize_faces
+            )
 
         # 2. Audio Processing & VAD
-        audio_data = self.audio_processor.process_chunk(now)
+        if self.use_simulation:
+            synthetic_audio = self.simulator.generate_audio_chunk(self.simulation_step)
+            audio_data = self.audio_processor.process_chunk(now, synthetic_chunk=synthetic_audio)
+        else:
+            audio_data = self.audio_processor.process_chunk(now)
+
         interaction_data = self.interaction_tracker.update(audio_data["is_speech"], dt)
         self.latest_interaction = interaction_data
 
-        # 3. Vision Detection & Tracking
-        tracked_faces = self.face_tracker.detect_and_track(frame, now)
-        participants_payload = []
-        detected_student_ids = []
-
-        # Annotate & analyze each participant
-        for face in tracked_faces:
-            x, y, w, h = face.bbox
-            
-            # Head pose estimation
-            pose = self.head_pose_estimator.estimate_pose(frame, face.bbox)
-            face.head_pose = pose
-
-            # Motion & inactivity detection
-            motion = self.movement_detector.compute_motion(frame, face.track_id, face.bbox, now)
-            face.movement_score = motion["motion_score"]
-
-            # Identity match
-            face_crop = frame[max(0, y):max(0, y+h), max(0, x):max(0, x+w)]
-            s_id, s_name, conf = self.face_recognizer.match_student(face_crop, face.track_id)
-            face.assigned_student_id = s_id
-            face.assigned_student_name = s_name
-            face.confidence = conf
-            detected_student_ids.append(s_id)
-
-            participants_payload.append({
-                "track_id": face.track_id,
-                "student_id": s_id,
-                "name": s_name,
-                "attentiveness_score": pose["attentiveness_score"],
-                "state": pose["state"],
-                "motion_score": motion["motion_score"],
-                "is_inactive": motion["is_inactive"],
-                "inactivity_seconds": motion["inactivity_seconds"]
-            })
-
-            # Privacy Anonymization if enabled
-            if config.privacy.anonymize_faces:
-                frame = self.face_tracker.apply_privacy_blur(frame, face.bbox)
-
-            # Draw HUD Overlays
-            # Color code: Green (Attentive), Yellow (Looking Down), Red (Distracted/Away)
-            if pose["state"] == "Attentive":
-                badge_color = (60, 210, 110)  # Green
-            elif pose["state"] == "Looking Down / Phone":
-                badge_color = (40, 180, 240)  # Orange/Yellow
-            else:
-                badge_color = (70, 70, 235)   # Red
-
-            # Bounding box
-            cv2.rectangle(frame, (x, y), (x + w, y + h), badge_color, 2)
-            
-            # Label banner
-            label = f"{s_name} [{pose['state']}]"
-            score_txt = f"Attn: {int(pose['attentiveness_score'] * 100)}% | Yaw: {pose['yaw']} deg"
-            cv2.rectangle(frame, (x, y - 28), (x + len(label) * 9 + 10, y), (20, 20, 25), -1)
-            cv2.putText(frame, label, (x + 5, y - 9), cv2.FONT_HERSHEY_SIMPLEX, 0.45, badge_color, 1)
-            cv2.putText(frame, score_txt, (x, y + h + 16), cv2.FONT_HERSHEY_SIMPLEX, 0.40, (230, 230, 230), 1)
-
-        # 4. Scenario 1: Sustained Presence Attendance
-        self.attendance_engine.process_frame_observations(detected_student_ids, now, dt)
+        # 3. Attendance Temporal State Machine
+        self.attendance_engine.process_frame(detected_student_ids, now, dt, is_paused=self.is_paused)
         attendance_summary = self.attendance_engine.get_summary()
 
-        # 5. Scenario 2: Multimodal Signal Fusion
+        # 4. Multimodal Signal Fusion
         telemetry = self.engagement_engine.compute_engagement(participants_payload, audio_data, now)
         self.latest_telemetry = telemetry
 
-        # 6. Scenario 3: AI-Driven Teaching Suggestions
+        # 5. Teaching Copilot Evaluation
         suggestion = self.teaching_advisor.evaluate_telemetry(telemetry, interaction_data, now)
 
-        # Draw Global Dashboard Header Overlays on the live frame
-        eng_color = (60, 210, 110) if telemetry["overall_engagement"] >= 65 else (
-            (40, 180, 240) if telemetry["overall_engagement"] >= 45 else (70, 70, 235)
-        )
-        header_text = f"Classroom Engagement: {telemetry['overall_engagement']}% [{telemetry.get('trend', 'Steady')}]"
-        cv2.rectangle(frame, (10, 10), (430, 44), (20, 20, 30), -1)
-        cv2.putText(frame, header_text, (18, 33), cv2.FONT_HERSHEY_SIMPLEX, 0.58, eng_color, 2)
+        # Compute FPS and latency
+        proc_time = time.perf_counter() - start_proc
+        self.inference_latency_ms = proc_time * 1000.0
+        self.fps = 1.0 / max(0.001, dt)
 
-        # Audio indicator in corner
-        audio_txt = "Mic: SPEAKING" if audio_data["is_speech"] else f"Mic: SILENT ({audio_data['silence_seconds']}s)"
-        mic_color = (100, 240, 150) if audio_data["is_speech"] else (180, 180, 180)
-        cv2.putText(frame, audio_txt, (10, frame.shape[0] - 15), cv2.FONT_HERSHEY_SIMPLEX, 0.45, mic_color, 1)
+        # Header HUD Overlay on the frame
+        hud_col = (70, 215, 120) if telemetry["overall_engagement"] >= 65 else (
+            (45, 185, 245) if telemetry["overall_engagement"] >= 45 else (75, 75, 235)
+        )
+        mode_tag = "SYNTHETIC SIMULATION" if self.use_simulation else "LIVE CAMERA"
+        blur_tag = " • PRIVACY BLUR ON" if config.privacy.anonymize_faces else ""
+        header_text = f"ClassMind AI [{mode_tag}{blur_tag}] | Activity: {telemetry['overall_engagement']}% ({telemetry.get('trend', 'Steady')})"
+
+        # Dark HUD background banner
+        cv2.rectangle(frame, (10, 10), (config.video_width - 10, 42), (20, 20, 28), -1)
+        cv2.rectangle(frame, (10, 10), (config.video_width - 10, 42), (60, 60, 80), 1)
+        cv2.putText(frame, header_text, (18, 32), cv2.FONT_HERSHEY_SIMPLEX, 0.44, hud_col, 1)
+
+        # If simulated, render corner simulation label
+        if self.use_simulation:
+            cv2.rectangle(frame, (config.video_width - 230, config.video_height - 30),
+                          (config.video_width - 10, config.video_height - 10), (15, 15, 22), -1)
+            cv2.putText(frame, "[SYNTHETIC SIMULATION]", (config.video_width - 225, config.video_height - 14),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.40, (120, 180, 255), 1)
 
         pipeline_output = {
             "telemetry": telemetry,
@@ -253,13 +325,56 @@ class ClassroomPipeline:
             "attendance": attendance_summary,
             "latest_suggestion": suggestion,
             "participants": participants_payload,
-            "use_simulation": self.use_simulation
+            "use_simulation": self.use_simulation,
+            "is_paused": self.is_paused,
+            "fps": round(self.fps, 1),
+            "latency_ms": round(self.inference_latency_ms, 1),
+            "camera_error": self.camera_error
         }
+
+        # Encode JPEG frame once for all consumers
+        ret, buffer = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
+        jpeg_bytes = buffer.tobytes() if ret else b""
+
+        with self.lock:
+            self.latest_frame = frame
+            self.latest_jpeg_bytes = jpeg_bytes
+            self.latest_output = pipeline_output
+            self.frame_count += 1
 
         return frame, pipeline_output
 
+    def process_frame(self) -> Tuple[np.ndarray, Dict[str, Any]]:
+        """Returns the most recently computed frame & telemetry (thread-safe)."""
+        with self.lock:
+            if self.latest_frame is not None and self.latest_output:
+                return self.latest_frame, self.latest_output
+        return self._step_pipeline()
+
     def get_jpeg_frame(self) -> bytes:
-        """Encodes current processed frame as JPEG bytes for browser streaming."""
-        frame, _ = self.process_frame()
-        ret, buffer = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
-        return buffer.tobytes() if ret else b""
+        """Encodes or retrieves current frame as JPEG bytes for video streaming."""
+        with self.lock:
+            if self.latest_jpeg_bytes:
+                return self.latest_jpeg_bytes
+        # If not yet generated, compute one step
+        _, _ = self._step_pipeline()
+        with self.lock:
+            return self.latest_jpeg_bytes
+
+    def get_latest_telemetry(self) -> Dict[str, Any]:
+        """Retrieves the latest telemetry payload without re-running heavy CV."""
+        with self.lock:
+            if self.latest_output:
+                return self.latest_output
+        _, output = self._step_pipeline()
+        return output
+
+    def release(self):
+        """Releases camera, worker thread, audio, and computational resources."""
+        self.is_running = False
+        if hasattr(self, 'worker_thread') and self.worker_thread.is_alive():
+            self.worker_thread.join(timeout=1.5)
+        self._release_camera()
+        if self.audio_processor is not None:
+            self.audio_processor.close()
+        print("[Pipeline] Released all vision and audio hardware resources.")

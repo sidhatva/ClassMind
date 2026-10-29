@@ -107,10 +107,17 @@ class FaceTracker:
 
     def apply_privacy_blur(self, frame: np.ndarray, bbox: Tuple[int, int, int, int]) -> np.ndarray:
         """Blurs the face area if anonymization is enabled."""
+        if frame is None or frame.size == 0:
+            return frame
+        f_h, f_w = frame.shape[:2]
         x, y, w, h = bbox
-        x, y = max(0, x), max(0, y)
-        sub_face = frame[y:y+h, x:x+w]
-        if sub_face.size > 0:
-            blurred = cv2.GaussianBlur(sub_face, (31, 31), 30)
-            frame[y:y+h, x:x+w] = blurred
+        x1, y1 = max(0, int(x)), max(0, int(y))
+        x2, y2 = min(f_w, int(x + w)), min(f_h, int(y + h))
+        if x2 > x1 and y2 > y1:
+            sub_face = frame[y1:y2, x1:x2]
+            kw = min(31, (x2 - x1) | 1)
+            kh = min(31, (y2 - y1) | 1)
+            if kw >= 3 and kh >= 3:
+                blurred = cv2.GaussianBlur(sub_face, (kw, kh), 30)
+                frame[y1:y2, x1:x2] = blurred
         return frame

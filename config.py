@@ -58,7 +58,7 @@ class TeachingAgentConfig(BaseModel):
 
 class PrivacyConfig(BaseModel):
     """Privacy-Preserving Offline Rules"""
-    anonymize_faces: bool = Field(default=False, description="Blur faces in video feeds")
+    anonymize_faces: bool = Field(default=True, description="Blur faces in video feeds")
     store_raw_video: bool = Field(default=False, description="Never store raw frames to disk")
     offline_only: bool = Field(default=True, description="Strict local edge processing")
 

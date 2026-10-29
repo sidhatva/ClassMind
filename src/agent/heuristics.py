@@ -1,54 +1,70 @@
 """
-Pedagogical Heuristics and Recommendation Rules for Classroom Intelligence.
-Translates multi-sensor engagement telemetry into actionable teaching interventions.
+ClassMind AI - Pedagogical Heuristics and Recommendation Rules Catalog.
+Maps multi-sensor engagement and interaction signals to deterministic, explainable teaching suggestions.
+Never claims to read internal emotions, thoughts, or cognitive potential.
 """
 
 from typing import Dict, List, Optional
+from dataclasses import dataclass
 
 
+@dataclass
 class TeachingRule:
-    def __init__(self, alert_type: str, severity: str, title: str, suggestion: str, rationale: str):
-        self.alert_type = alert_type
-        self.severity = severity  # "info", "warning", "urgent"
-        self.title = title
-        self.suggestion = suggestion
-        self.rationale = rationale
+    alert_type: str
+    priority: str  # 'info', 'warning', 'urgent'
+    title: str
+    suggestion: str
+    rationale: str
+    instructional_purpose: str
 
 
-RULES_CATALOG = [
-    TeachingRule(
+RULES_CATALOG: Dict[str, TeachingRule] = {
+    "ATTENTION_DROP": TeachingRule(
         alert_type="ATTENTION_DROP",
-        severity="warning",
-        title="Attention Drop Detected",
-        suggestion="Introduce a 30-second rapid check-in question or live interactive poll.",
-        rationale="Over 40% of participants exhibited downward gaze (phone/desk) or diverted head orientation over the past 15 seconds."
+        priority="warning",
+        title="Visual Orientation Drop Detected",
+        suggestion="Introduce a 30-second rapid check-in question or conduct a quick think-pair-share prompt.",
+        rationale="Over 40% of observed participants exhibited downward gaze (notes/phones) or diverted head orientation over the past 12 seconds.",
+        instructional_purpose="Re-align classroom attention and encourage active student participation."
     ),
-    TeachingRule(
+    "MONOLOGUE_PACING": TeachingRule(
         alert_type="MONOLOGUE_PACING",
-        severity="info",
+        priority="info",
         title="Extended Monologue Pacing",
-        suggestion="Pause for 15 seconds to solicit student questions, or prompt a 'think-pair-share'.",
-        rationale="Continuous instructor speech has exceeded 90 seconds without reciprocal student dialogue."
+        suggestion="Pause for 15 seconds to solicit questions, or ask for a simple thumbs-up/thumbs-down check.",
+        rationale="Continuous monologue has exceeded 90 seconds without reciprocal student dialogue or pauses.",
+        instructional_purpose="Improve knowledge retention by breaking passive listening cycles."
     ),
-    TeachingRule(
+    "HIGH_INTERACTION": TeachingRule(
         alert_type="HIGH_INTERACTION",
-        severity="info",
+        priority="info",
         title="High Discussion Energy",
-        suggestion="Excellent peer interaction. Capture key insights on board and summarize main takeaways before advancing.",
-        rationale="Vocal energy and active postures are synchronized at optimal engagement levels."
+        suggestion="Excellent peer interaction. Capture 1-2 core student ideas on the board and synthesize key takeaways.",
+        rationale="Acoustic dynamics and active participant movement indicate high collaborative discussion.",
+        instructional_purpose="Consolidate learning outcomes while engagement momentum is peak."
     ),
-    TeachingRule(
-        alert_type="PROLONGED_SILENCE",
-        severity="warning",
-        title="Extended Classroom Silence",
-        suggestion="Reframe the previous prompt or ask for a simple thumbs-up/down gesture to break the hesitation.",
-        rationale="Vocal activity has been inactive for over 20 seconds following an instructional transition."
+    "LOW_ACTIVITY": TeachingRule(
+        alert_type="LOW_ACTIVITY",
+        priority="urgent",
+        title="Low Classroom Activity Detected",
+        suggestion="Initiate a quick physical posture reset, transition to practical exercises, or invite a volunteer to share.",
+        rationale="Consistently low physical movement and speech activity observed across the past 20 seconds.",
+        instructional_purpose="Revitalize classroom energy and prevent cognitive fatigue."
     ),
-    TeachingRule(
-        alert_type="PHYSICAL_INACTIVITY",
-        severity="urgent",
-        title="Lethargic Classroom State",
-        suggestion="Initiate a quick physical posture reset or ask students to stand up for a 1-minute energizer.",
-        rationale="Zero motion detected across multiple participants; posture signals drowsiness or low energy."
+    "SENSOR_QUALITY_ISSUE": TeachingRule(
+        alert_type="SENSOR_QUALITY_ISSUE",
+        priority="warning",
+        title="Sensor Signal Degradation",
+        suggestion="Check camera positioning or microphone connection. The system is operating on reduced multimodal coverage.",
+        rationale="One or more sensory inputs (video stream or microphone) became unavailable or intermittent.",
+        instructional_purpose="Ensure high-fidelity telemetry collection for instructional insights."
+    ),
+    "SESSION_MILESTONE": TeachingRule(
+        alert_type="SESSION_MILESTONE",
+        priority="info",
+        title="Mid-Session Check-in",
+        suggestion="Review key concepts covered so far before moving into the next module.",
+        rationale="Half of the allocated lecture time has elapsed with stable sustained attendance.",
+        instructional_purpose="Anchor intermediate learning milestones."
     )
-]
+}
